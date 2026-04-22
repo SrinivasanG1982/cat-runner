@@ -1,0 +1,393 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Golden Cat Runner</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body {
+            margin: 0;
+            overflow: hidden;
+            background: #1a1a1a;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            touch-action: manipulation;
+        }
+        canvas {
+            display: block;
+            background: linear-gradient(to bottom, #87CEEB 0%, #E0F6FF 100%);
+            box-shadow: 0 0 20px rgba(0,0,0,0.5);
+        }
+        .ui-overlay {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            pointer-events: none;
+            color: #333;
+            text-shadow: 1px 1px 2px rgba(255,255,255,0.8);
+        }
+        .controls-hint {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 10px 15px;
+            border-radius: 12px;
+            font-size: 14px;
+            pointer-events: none;
+        }
+        .mobile-controls {
+            position: absolute;
+            bottom: 30px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            gap: 20px;
+            pointer-events: auto;
+        }
+        .btn {
+            width: 70px;
+            height: 70px;
+            background: rgba(255, 255, 255, 0.3);
+            border: 2px solid white;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: white;
+            user-select: none;
+            cursor: pointer;
+            backdrop-filter: blur(5px);
+        }
+        .btn:active {
+            background: rgba(255, 255, 255, 0.6);
+            transform: scale(0.9);
+        }
+    </style>
+</head>
+<body>
+
+<div class="ui-overlay">
+    <div class="text-3xl font-bold">Score: <span id="scoreVal">0</span></div>
+    <div class="text-xl">Distance: <span id="distVal">0</span>m</div>
+</div>
+
+<div class="controls-hint hidden md:block">
+    ⬅️ Stop | ➡️ Run | ⬆️ Jump
+</div>
+
+<div class="mobile-controls md:hidden">
+    <div class="btn" id="btnLeft">STOP</div>
+    <div class="btn" id="btnUp">JUMP</div>
+    <div class="btn" id="btnRight">RUN</div>
+</div>
+
+<canvas id="gameCanvas"></canvas>
+
+<script>
+    const canvas = document.getElementById('gameCanvas');
+    const ctx = canvas.getContext('2d');
+    const scoreElement = document.getElementById('scoreVal');
+    const distElement = document.getElementById('distVal');
+
+    // Game Constants
+    const GROUND_HEIGHT = 100;
+    const GRAVITY = 0.6;
+    const JUMP_FORCE = -15;
+    const MAX_SPEED = 8;
+    const FRICTION = 0.98;
+    const ACCELERATION = 0.5;
+
+    // Game State
+    let score = 0;
+    let distance = 0;
+    let gameActive = true;
+    let particles = [];
+    let clouds = [];
+    let golds = [];
+    
+    const keys = {
+        ArrowRight: false,
+        ArrowLeft: false,
+        ArrowUp: false
+    };
+
+    // Responsive Canvas
+    function resize() {
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+    }
+    window.addEventListener('resize', resize);
+    resize();
+
+    // Cat Object
+    const cat = {
+        x: 100,
+        y: 0,
+        width: 60,
+        height: 45,
+        vx: 0,
+        vy: 0,
+        isJumping: false,
+        frame: 0,
+        animationSpeed: 0,
+        
+        draw() {
+            ctx.save();
+            ctx.translate(this.x + this.width/2, this.y + this.height/2);
+            
+            // Wobble effect based on speed
+            const wobble = Math.sin(this.frame * 0.2) * (this.vx * 2);
+            ctx.rotate(wobble * 0.01);
+
+            // Tail
+            ctx.fillStyle = '#ff9933';
+            ctx.beginPath();
+            ctx.roundRect(-40, -5 + Math.sin(this.frame * 0.1) * 5, 20, 10, 5);
+            ctx.fill();
+
+            // Body
+            ctx.fillStyle = '#ffcc66';
+            ctx.beginPath();
+            ctx.roundRect(-this.width/2, -this.height/2, this.width, this.height - 5, 15);
+            ctx.fill();
+
+            // Head
+            ctx.fillStyle = '#ffcc66';
+            ctx.beginPath();
+            ctx.arc(20, -10, 20, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Ears
+            ctx.fillStyle = '#ff9933';
+            ctx.beginPath();
+            ctx.moveTo(10, -25); ctx.lineTo(20, -40); ctx.lineTo(30, -25);
+            ctx.fill();
+            ctx.beginPath();
+            ctx.moveTo(25, -20); ctx.lineTo(35, -35); ctx.lineTo(40, -20);
+            ctx.fill();
+
+            // Eyes
+            ctx.fillStyle = 'white';
+            ctx.beginPath();
+            ctx.arc(25, -15, 5, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.fillStyle = 'black';
+            ctx.beginPath();
+            ctx.arc(27, -15, 2, 0, Math.PI * 2);
+            ctx.fill();
+
+            // Nose
+            ctx.fillStyle = '#ff99cc';
+            ctx.beginPath();
+            ctx.arc(35, -10, 3, 0, Math.PI * 2);
+            ctx.fill();
+
+            ctx.restore();
+        },
+
+        update() {
+            // Horizontal Movement
+            if (keys.ArrowRight) {
+                this.vx += ACCELERATION;
+            } else if (keys.ArrowLeft) {
+                this.vx = 0; // Immediate stop as requested
+            } else {
+                this.vx *= FRICTION;
+            }
+
+            if (this.vx > MAX_SPEED) this.vx = MAX_SPEED;
+            if (this.vx < 0.1) this.vx = 0;
+
+            // Gravity & Jumping
+            this.vy += GRAVITY;
+            this.y += this.vy;
+
+            const groundY = canvas.height - GROUND_HEIGHT - this.height;
+            if (this.y > groundY) {
+                this.y = groundY;
+                this.vy = 0;
+                this.isJumping = false;
+            }
+
+            if (keys.ArrowUp && !this.isJumping) {
+                this.vy = JUMP_FORCE;
+                this.isJumping = true;
+            }
+
+            this.frame += this.vx * 0.5;
+            
+            // Distance tracking (only if moving)
+            if (this.vx > 0) {
+                distance += Math.floor(this.vx / 2);
+                distElement.innerText = Math.floor(distance / 10);
+                // Bonus score based on miles
+                if (Math.floor(distance) % 500 === 0) score += 10;
+            }
+        }
+    };
+
+    class Gold {
+        constructor() {
+            this.reset();
+        }
+        reset() {
+            this.x = canvas.width + Math.random() * 500;
+            this.y = canvas.height - GROUND_HEIGHT - 40 - Math.random() * 100;
+            this.size = 15;
+            this.collected = false;
+            this.pulse = 0;
+        }
+        update(speed) {
+            this.x -= speed;
+            this.pulse += 0.1;
+            if (this.x < -50) this.reset();
+
+            // Collision detection
+            if (!this.collected && 
+                cat.x < this.x + this.size &&
+                cat.x + cat.width > this.x &&
+                cat.y < this.y + this.size &&
+                cat.y + cat.height > this.y) {
+                this.collect();
+            }
+        }
+        collect() {
+            this.collected = true;
+            score += 50;
+            scoreElement.innerText = score;
+            createParticles(this.x, this.y, '#ffd700');
+            setTimeout(() => this.reset(), 100);
+        }
+        draw() {
+            if (this.collected) return;
+            ctx.fillStyle = '#ffd700';
+            ctx.shadowBlur = 10;
+            ctx.shadowColor = 'gold';
+            ctx.beginPath();
+            const s = this.size + Math.sin(this.pulse) * 3;
+            ctx.arc(this.x, this.y, s, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.shadowBlur = 0;
+            
+            // Shine
+            ctx.fillStyle = 'rgba(255,255,255,0.8)';
+            ctx.beginPath();
+            ctx.arc(this.x - 4, this.y - 4, s/3, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    }
+
+    function createParticles(x, y, color) {
+        for(let i=0; i<8; i++) {
+            particles.push({
+                x, y,
+                vx: (Math.random() - 0.5) * 10,
+                vy: (Math.random() - 0.5) * 10,
+                life: 1.0,
+                color
+            });
+        }
+    }
+
+    // Initialize decorative elements
+    for(let i=0; i<5; i++) {
+        clouds.push({
+            x: Math.random() * canvas.width,
+            y: Math.random() * (canvas.height/2),
+            speed: 0.2 + Math.random() * 0.5,
+            size: 40 + Math.random() * 40
+        });
+    }
+    for(let i=0; i<4; i++) golds.push(new Gold());
+
+    // Input Handling
+    window.addEventListener('keydown', e => { if(keys.hasOwnProperty(e.code)) keys[e.code] = true; });
+    window.addEventListener('keyup', e => { if(keys.hasOwnProperty(e.code)) keys[e.code] = false; });
+
+    // Touch Support
+    const setupBtn = (id, key) => {
+        const el = document.getElementById(id);
+        el.addEventListener('touchstart', (e) => { e.preventDefault(); keys[key] = true; });
+        el.addEventListener('touchend', (e) => { e.preventDefault(); keys[key] = false; });
+        el.addEventListener('mousedown', () => keys[key] = true);
+        el.addEventListener('mouseup', () => keys[key] = false);
+    };
+    setupBtn('btnLeft', 'ArrowLeft');
+    setupBtn('btnUp', 'ArrowUp');
+    setupBtn('btnRight', 'ArrowRight');
+
+    function drawBackground() {
+        // Sky
+        const skyGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        skyGrad.addColorStop(0, '#87CEEB');
+        skyGrad.addColorStop(1, '#E0F6FF');
+        ctx.fillStyle = skyGrad;
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+        // Clouds
+        ctx.fillStyle = 'white';
+        clouds.forEach(c => {
+            c.x -= c.speed + (cat.vx * 0.1);
+            if (c.x < -100) c.x = canvas.width + 100;
+            ctx.beginPath();
+            ctx.arc(c.x, c.y, c.size, 0, Math.PI * 2);
+            ctx.arc(c.x + 30, c.y - 10, c.size * 0.8, 0, Math.PI * 2);
+            ctx.arc(c.x + 60, c.y, c.size * 0.9, 0, Math.PI * 2);
+            ctx.fill();
+        });
+
+        // Ground
+        ctx.fillStyle = '#4CAF50';
+        ctx.fillRect(0, canvas.height - GROUND_HEIGHT, canvas.width, GROUND_HEIGHT);
+        
+        // Track detail
+        ctx.fillStyle = '#388E3C';
+        for(let i=0; i<canvas.width; i+=100) {
+            let offset = (i - (distance % 100));
+            ctx.fillRect(offset, canvas.height - GROUND_HEIGHT, 40, 5);
+        }
+    }
+
+    function updateParticles() {
+        for(let i = particles.length - 1; i >= 0; i--) {
+            const p = particles[i];
+            p.x += p.vx;
+            p.y += p.vy;
+            p.life -= 0.02;
+            if (p.life <= 0) {
+                particles.splice(i, 1);
+                continue;
+            }
+            ctx.globalAlpha = p.life;
+            ctx.fillStyle = p.color;
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, 4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1.0;
+    }
+
+    function gameLoop() {
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        
+        drawBackground();
+        
+        cat.update();
+        cat.draw();
+
+        golds.forEach(g => {
+            g.update(cat.vx);
+            g.draw();
+        });
+
+        updateParticles();
+
+        requestAnimationFrame(gameLoop);
+    }
+
+    window.onload = gameLoop;
+</script>
+</body>
+</html>
